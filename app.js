@@ -215,6 +215,15 @@ function grabBlob() {
   return new Promise((res, rej) =>
     c.toBlob((b) => (b ? res({ blob: b, w: cw, h: ch }) : rej(new Error('toBlob selhal'))), 'image/jpeg', parseFloat(cfg.qualitySel)));
 }
+let thumbCanvas = null;
+function makeThumb() {
+  const src = workCanvas;
+  const tw = 480, th = Math.max(1, Math.round(src.height * tw / src.width));
+  const c = thumbCanvas || (thumbCanvas = document.createElement('canvas'));
+  c.width = tw; c.height = th;
+  c.getContext('2d').drawImage(src, 0, 0, tw, th);
+  return new Promise((res) => c.toBlob((b) => res(b), 'image/jpeg', 0.6));
+}
 let workCanvas = null;
 function getCanvas() { return workCanvas || (workCanvas = document.createElement('canvas')); }
 function releaseCanvas() {
@@ -228,8 +237,9 @@ async function captureOne() {
   let out;
   try { out = await grabBlob(); }
   finally { if (useShotFlash) await setTorch(false); }
+  const thumb = await makeThumb().catch(() => null); // malý náhled pro rychlé přehrání ve videu
   const n = String(photoCount + 1).padStart(4, '0');
-  await dbAdd({ name: `CS_${stamp()}_${n}.jpg`, blob: out.blob, ts: Date.now(), w: out.w, h: out.h });
+  await dbAdd({ name: `CS_${stamp()}_${n}.jpg`, blob: out.blob, thumb, ts: Date.now(), w: out.w, h: out.h });
   photoCount++;
   // vizuální záblesk obrazovky
   const f = $('shutterFlash'); f.classList.add('on'); requestAnimationFrame(() => setTimeout(() => f.classList.remove('on'), 60));
@@ -516,6 +526,11 @@ document.addEventListener('visibilitychange', async () => {
     updateButtons();
   }
 });
+
+/* ---------- Spolupráce s modulem Video ---------- */
+window.CS = { isRunning: () => running };
+window.addEventListener('cs-video-open', () => { stopCamera(); video.srcObject = null; });
+window.addEventListener('cs-video-close', async () => { await refreshExport(); await startCamera(); applyRatioUI(); });
 
 /* ---------- Start ---------- */
 (async function init() {

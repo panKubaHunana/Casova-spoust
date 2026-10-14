@@ -44,6 +44,7 @@
     </div>
     <button id="flashBtn" class="chip" aria-label="Blesk">Blesk: vyp</button>
     <button id="afBtn" class="chip" aria-label="Zámek autofokusu">AF zámek: vyp</button>
+    <button id="videoBtn" class="chip" aria-label="Složit video">🎬 Video</button>
   </section>
 
   <section id="controls">
@@ -177,8 +178,84 @@
     </div>
   </div>
 
+  <!-- Stopmotion video -->
+  <div id="videoSheet" class="sheet" hidden>
+    <div class="sheetBody">
+      <h2>Stopmotion video</h2>
+      <div id="vSrc" class="hint"></div>
+
+      <canvas id="vCanvas" width="480" height="270"></canvas>
+      <div class="vctl">
+        <button id="vPlay" class="batch">▶ Přehrát</button>
+      </div>
+      <input id="vSlider" type="range" min="0" max="0" value="0" step="1">
+      <div id="vFrameLbl" class="hint"></div>
+
+      <label class="row">
+        <span>Rychlost (snímků/s)</span>
+        <select id="vFps">
+          <option>6</option><option>8</option><option>10</option><option>12</option>
+          <option>15</option><option>24</option><option>25</option><option>30</option>
+        </select>
+      </label>
+      <label class="row">
+        <span>Řazení</span>
+        <select id="vMode">
+          <option value="normal">Normálně</option>
+          <option value="reverse">Pozpátku</option>
+          <option value="pingpong">Tam a zpět (ping-pong)</option>
+        </select>
+      </label>
+      <label class="row">
+        <span>Od snímku</span>
+        <input id="vFrom" type="number" inputmode="numeric" min="1" step="1" value="1">
+      </label>
+      <label class="row">
+        <span>Do snímku</span>
+        <input id="vTo" type="number" inputmode="numeric" min="1" step="1" value="1">
+      </label>
+      <label class="row">
+        <span>Rozlišení videa</span>
+        <select id="vRes">
+          <option value="1080">Full HD</option>
+          <option value="4k">4K</option>
+          <option value="orig">Původní velikost</option>
+        </select>
+      </label>
+      <label class="row">
+        <span>Kvalita (datový tok)</span>
+        <select id="vQual">
+          <option value="0.1">Standardní</option>
+          <option value="0.2">Vysoká</option>
+          <option value="0.4">Maximální</option>
+        </select>
+      </label>
+
+      <div id="vInfo" class="hint"></div>
+      <div id="vCap" class="hint"></div>
+
+      <button id="vBuild" class="primary">Složit video (MP4)</button>
+      <button id="vCancel" class="danger" hidden>Zrušit skládání</button>
+      <div id="vProg" hidden>
+        <div id="vBarWrap"><div id="vBar"></div></div>
+        <div id="vProgTxt" class="hint"></div>
+        <div class="hint">Nech displej zapnutý a nepřepínej se do jiné aplikace.</div>
+      </div>
+
+      <div id="vResult" hidden>
+        <video id="vOut" controls playsinline></video>
+        <div id="vResInfo" class="hint"></div>
+        <button id="vShare" class="primary">Sdílet / Uložit video do Fotek</button>
+      </div>
+
+      <button id="closeVideo" class="batch">Zavřít</button>
+    </div>
+  </div>
+
   <div id="toast" hidden></div>
 </div>
+<script src="mp4-muxer.js"></script>
 <script src="app.js"></script>
+<script src="video.js"></script>
 </body>
 </html>
