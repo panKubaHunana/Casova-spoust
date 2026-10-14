@@ -28,6 +28,7 @@
       <div id="shutterFlash"></div>
       <div id="grid"></div>
       <div id="camMsg" hidden></div>
+      <div id="cdNum" hidden></div>
     </div>
   </main>
 
@@ -143,6 +144,32 @@
         </select>
       </label>
 
+      <label class="row">
+        <span>Zvukový odpočet před snímkem</span>
+        <select id="beepSec">
+          <option value="0">Vypnutý</option>
+          <option value="3">3 s (pípnutí 3‑2‑1)</option>
+          <option value="5">5 s</option>
+        </select>
+      </label>
+
+      <label class="row">
+        <span>Hlasitost pípání</span>
+        <select id="beepVol">
+          <option value="0">Ztlumeno (jen číslice)</option>
+          <option value="0.25">Tiše</option>
+          <option value="0.6">Středně</option>
+          <option value="1">Nahlas</option>
+        </select>
+      </label>
+
+      <label class="row check">
+        <span>Tón v okamžiku snímku</span>
+        <input id="beepShot" type="checkbox">
+      </label>
+
+      <button id="beepTest" class="batch" type="button">🔊 Vyzkoušet zvuk odpočtu</button>
+
       <label class="row check">
         <span>Mřížka v náhledu</span>
         <input id="gridChk" type="checkbox">
@@ -157,7 +184,12 @@
         AE/WB zámek: namiř na scénu, počkej pár sekund, až se expozice a barvy ustálí,
         a teprve pak klepni na AE/WB. Zamkne se aktuální stav (pokud to tvůj iPhone dovolí).
       </div>
-      <div class="hint">Verze 4 · 4:3, AE/WB zámek, mazání snímků, ZIP</div>
+      <div class="hint">
+        Zvukový odpočet: před každým snímkem pípne každou sekundu (poslední pípnutí je vyšší)
+        a v náhledu se ukáže velká číslice. Hlasitost řídí i tlačítka hlasitosti iPhonu.
+        Je‑li interval kratší než odpočet, pípnutí, která se nevejdou, se vynechají.
+      </div>
+      <div class="hint">Verze 5 · zvukový odpočet před snímkem</div>
       <button id="closeSettings" class="primary">Hotovo</button>
     </div>
   </div>

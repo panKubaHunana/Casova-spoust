@@ -120,3 +120,9 @@ input[type=checkbox]{width:24px;height:24px}
 #toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top) + 56px);transform:translateX(-50%);
   background:rgba(40,40,42,.96);padding:10px 16px;border-radius:12px;font-size:14px;z-index:20;max-width:90%;text-align:center}
 #toast[hidden]{display:none}
+
+/* Odpočet před snímkem (velká číslice v náhledu) */
+#cdNum{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:min(28vw,160px);font-weight:800;
+  color:#fff;text-shadow:0 2px 18px rgba(0,0,0,.7);pointer-events:none;font-variant-numeric:tabular-nums;line-height:1}
+#cdNum.pop{animation:cdpop .9s ease-out forwards}
+@keyframes cdpop{0%{opacity:0;transform:translate(-50%,-50%) scale(1.4)}15%{opacity:1;transform:translate(-50%,-50%) scale(1)}100%{opacity:0;transform:translate(-50%,-50%) scale(.9)}}

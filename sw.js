@@ -1,5 +1,5 @@
 // Service worker – offline cache pro Časovou spoušť (síť má přednost, aby se aktualizace načetly hned)
-const CACHE = 'casova-spoust-v4';
+const CACHE = 'casova-spoust-v5';
 const ASSETS = ['./', './index.html', './style.css', './app.js', './video.js', './mp4-muxer.js', './manifest.webmanifest',
   './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png'];
 

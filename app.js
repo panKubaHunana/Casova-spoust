@@ -10,7 +10,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const DEFAULTS = {
   ratio: '3:2', intervalVal: 5, intervalUnit: 1, stopMode: 'count', countVal: 100,
   durationVal: 10, durationUnit: 60, delayVal: 3, resSel: 'max', camSel: 'environment',
-  flashMode: 'off', qualitySel: '0.9', gridChk: false, afLock: false, aeLock: false
+  flashMode: 'off', qualitySel: '0.9', gridChk: false, afLock: false, aeLock: false,
+  beepSec: '3', beepShot: true, beepVol: '0.6'
 };
 let cfg = { ...DEFAULTS };
 try { cfg = { ...DEFAULTS, ...JSON.parse(localStorage.getItem('cs-cfg') || '{}') }; } catch (e) {}
@@ -233,6 +234,69 @@ async function applyAeLock(lock, silent = false) {
   return true;
 }
 
+/* ---------- Zvukový odpočet před snímkem ---------- */
+// Web Audio API: krátké pípnutí každou sekundu před snímkem (3‑2‑1) + volitelný vyšší tón v okamžiku snímku.
+// iOS dovolí zvuk jen tehdy, když se AudioContext poprvé „odemkne“ klepnutím uživatele (tlačítko Start / Vyzkoušet).
+let actx = null, beepTimers = [];
+function unlockAudio() {
+  try {
+    // iOS 17+: typ relace „playback“ = zvuk hraje i při ztišeném iPhonu (boční přepínač)
+    if (navigator.audioSession) navigator.audioSession.type = 'playback';
+  } catch (e) {}
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    if (!actx) actx = new AC();
+    if (actx.state !== 'running') actx.resume().catch(() => {});
+    // tichý buffer – spolehlivé odemknutí zvuku na iOS
+    const b = actx.createBuffer(1, 1, 22050), src = actx.createBufferSource();
+    src.buffer = b; src.connect(actx.destination); src.start(0);
+  } catch (e) {}
+}
+function beep(freq = 1000, durMs = 120) {
+  const vol = parseFloat(cfg.beepVol) || 0;
+  if (!actx || vol <= 0) return;
+  try {
+    if (actx.state !== 'running') actx.resume().catch(() => {}); // po návratu z pozadí bývá „interrupted“
+    const t = actx.currentTime + 0.01, d = durMs / 1000;
+    const o = actx.createOscillator(), g = actx.createGain();
+    o.type = 'sine'; o.frequency.value = freq;
+    // krátký náběh/doběh, aby pípnutí „necvakalo“
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.01);
+    g.gain.setValueAtTime(vol, t + d - 0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+    o.connect(g); g.connect(actx.destination);
+    o.start(t); o.stop(t + d + 0.02);
+  } catch (e) {}
+}
+function showCountdown(n) {
+  const el = $('cdNum'); if (!el) return;
+  if (!n) { el.hidden = true; return; }
+  el.textContent = n; el.hidden = false;
+  el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop');
+  clearTimeout(showCountdown._t); showCountdown._t = setTimeout(() => (el.hidden = true), 950);
+}
+function clearBeeps() { beepTimers.forEach(clearTimeout); beepTimers = []; showCountdown(0); }
+// Naplánuje pípnutí na due-N s … due-1 s. Pípnutí, která by padla do minulosti
+// (krátký interval nebo zpoždění), se vynechají – odpočet se nikdy nepřekrývá s předchozím snímkem.
+function scheduleBeeps(due) {
+  clearBeeps();
+  const n = parseInt(cfg.beepSec, 10) || 0;
+  if (!n) return;
+  const now = Date.now();
+  // u prvního snímku (po odpočtu před startem) tolerujeme pár ms zpoždění, jinak by se ztratilo první „3“
+  const tol = shotIndex === 0 ? -250 : 150;
+  for (let k = n; k >= 1; k--) {
+    const at = due - k * 1000;
+    if (at < now + tol) continue;
+    beepTimers.push(setTimeout(() => {
+      if (!running || document.hidden) return;
+      beep(k === 1 ? 1100 : 880, 110); showCountdown(k);
+    }, Math.max(0, at - now)));
+  }
+}
+
 /* ---------- Pořízení snímku ---------- */
 function stamp() {
   const d = new Date(), p = (n, l = 2) => String(n).padStart(l, '0');
@@ -342,6 +406,7 @@ async function startTimelapse() {
 function scheduleNext() {
   if (!running) return;
   const due = t0 + shotIndex * intervalMs;
+  scheduleBeeps(due);
   timer = setTimeout(tick, Math.max(0, due - Date.now()));
 }
 async function tick() {
@@ -354,6 +419,7 @@ async function tick() {
     missed++; shotIndex++;
   } else {
     try {
+      if (cfg.beepShot && parseInt(cfg.beepSec, 10)) beep(1600, 260); // tón „cvak“ v okamžiku snímku
       await captureOne(); taken++; failStreak = 0;
       if (taken % 25 === 0 && (await storageLeftMB()) < 300) {
         return finish(true, 'Došlo místo v úložišti prohlížeče (zbývá < 300 MB). Uložené snímky hned exportuj.');
@@ -374,7 +440,7 @@ async function tick() {
 }
 function finish(manual = false, reason = '') {
   running = false;
-  clearTimeout(timer); clearInterval(ticker);
+  clearTimeout(timer); clearInterval(ticker); clearBeeps();
   releaseWake();
   releaseCanvas();
   $('progress').hidden = true;
@@ -433,7 +499,11 @@ function updateButtons() {
   $('grid').classList.toggle('on', !!cfg.gridChk);
   if (!running && $('statusPill').className !== 'warn') setStatus('Připraveno');
 }
-$('startBtn').addEventListener('click', () => (running ? finish(true) : startTimelapse()));
+$('startBtn').addEventListener('click', () => {
+  if (running) return finish(true);
+  if (parseInt(cfg.beepSec, 10)) unlockAudio(); // musí proběhnout přímo v klepnutí (pravidlo iOS)
+  startTimelapse();
+});
 
 document.querySelectorAll('#ratioSeg button').forEach((b) => b.addEventListener('click', () => {
   cfg.ratio = b.dataset.ratio; saveCfg(); applyRatioUI();
@@ -459,10 +529,11 @@ $('aeBtn').addEventListener('click', async () => {
 });
 
 /* ---------- Nastavení – formulář ---------- */
-const FIELDS = ['intervalVal', 'intervalUnit', 'stopMode', 'countVal', 'durationVal', 'durationUnit', 'delayVal', 'resSel', 'camSel', 'flashMode', 'qualitySel'];
+const FIELDS = ['intervalVal', 'intervalUnit', 'stopMode', 'countVal', 'durationVal', 'durationUnit', 'delayVal', 'resSel', 'camSel', 'flashMode', 'qualitySel', 'beepSec', 'beepVol'];
 function loadForm() {
   FIELDS.forEach((k) => ($(k).value = cfg[k]));
   $('gridChk').checked = !!cfg.gridChk;
+  $('beepShot').checked = !!cfg.beepShot;
   showModeRows(); renderEstimate();
 }
 function showModeRows() {
@@ -496,6 +567,14 @@ $('intervalVal').addEventListener('input', () => { cfg.intervalVal = $('interval
 $('countVal').addEventListener('input', () => { cfg.countVal = $('countVal').value; renderEstimate(); });
 $('durationVal').addEventListener('input', () => { cfg.durationVal = $('durationVal').value; renderEstimate(); });
 $('gridChk').addEventListener('change', () => { cfg.gridChk = $('gridChk').checked; saveCfg(); updateButtons(); });
+$('beepShot').addEventListener('change', () => { cfg.beepShot = $('beepShot').checked; saveCfg(); });
+$('beepTest').addEventListener('click', () => { // ukázka: 3‑2‑1 a tón snímku
+  unlockAudio();
+  const n = parseInt(cfg.beepSec, 10) || 3;
+  for (let k = n; k >= 1; k--) setTimeout(() => beep(k === 1 ? 1100 : 880, 110), (n - k) * 1000 + 50);
+  if (cfg.beepShot) setTimeout(() => beep(1600, 260), n * 1000 + 50);
+  if (!(parseFloat(cfg.beepVol) > 0)) toast('Hlasitost je nastavená na „Ztlumeno“.');
+});
 // Když se nic nesnímá, kameru na dobu nastavení vypneme – 12Mpx proud jinak zpomaluje klávesnici.
 $('settingsBtn').addEventListener('click', () => {
   if (!running) { stopCamera(); video.srcObject = null; }
