@@ -1,0 +1,16 @@
+{
+  "name": "Časová spoušť",
+  "short_name": "Časosběr",
+  "description": "Časosběrné snímání fotoaparátem iPhonu (poměr 3:2 / 16:9, blesk, zámek AF).",
+  "lang": "cs",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
