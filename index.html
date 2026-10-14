@@ -40,10 +40,14 @@
   <section id="toolbar">
     <div class="seg" id="ratioSeg" role="group" aria-label="Poměr stran">
       <button data-ratio="3:2" class="active">3:2</button>
+      <button data-ratio="4:3">4:3</button>
       <button data-ratio="16:9">16:9</button>
     </div>
     <button id="flashBtn" class="chip" aria-label="Blesk">Blesk: vyp</button>
-    <button id="afBtn" class="chip" aria-label="Zámek autofokusu">AF zámek: vyp</button>
+    <div class="pair">
+      <button id="afBtn" class="chip" aria-label="Zámek autofokusu">AF: vyp</button>
+      <button id="aeBtn" class="chip" aria-label="Zámek expozice a vyvážení bílé">AE/WB: vyp</button>
+    </div>
     <button id="videoBtn" class="chip" aria-label="Složit video">🎬 Video</button>
   </section>
 
@@ -149,6 +153,11 @@
         Pro spolehlivé snímání nech displej zapnutý (aplikace brání uspání),
         telefon připoj k nabíječce a nepřepínej se do jiné aplikace.
       </div>
+      <div class="hint">
+        AE/WB zámek: namiř na scénu, počkej pár sekund, až se expozice a barvy ustálí,
+        a teprve pak klepni na AE/WB. Zamkne se aktuální stav (pokud to tvůj iPhone dovolí).
+      </div>
+      <div class="hint">Verze 4 · 4:3, AE/WB zámek, mazání snímků, ZIP</div>
       <button id="closeSettings" class="primary">Hotovo</button>
     </div>
   </div>
@@ -165,16 +174,57 @@
           <option value="20">20 snímků</option>
           <option value="40" selected>40 snímků</option>
           <option value="60">60 snímků</option>
+          <option value="100">100 snímků</option>
+        </select>
+      </label>
+      <label class="row">
+        <span>Formát sdílení</span>
+        <select id="fmtSel">
+          <option value="img">Obrázky (do Fotek)</option>
+          <option value="zip">ZIP soubor (do Souborů)</option>
         </select>
       </label>
       <img id="lastFull" alt="Poslední snímek" hidden>
+      <button id="galleryBtn" class="batch">🖼 Vybrat a smazat snímky</button>
       <div id="batchList"></div>
       <p class="hint">
-        Po stisku „Sdílet“ zvol v nabídce iOS <b>Uložit N obrázků</b> (do Fotek)
-        nebo <b>Uložit do Souborů</b>.
+        Obrázky: po stisku „Sdílet“ zvol v nabídce iOS <b>Uložit N obrázků</b> (do Fotek).
+        ZIP: zvol <b>Uložit do Souborů</b>. Dávky 100 snímků doporučuji jen pro ZIP.
       </p>
       <button id="clearBtn" class="danger">Smazat všechny snímky</button>
       <button id="closeExport" class="primary">Zavřít</button>
+    </div>
+  </div>
+
+  <!-- Správa snímků (výběr a mazání) -->
+  <div id="gallerySheet" class="sheet" hidden>
+    <div class="sheetBody">
+      <h2>Správa snímků</h2>
+      <div id="galInfo" class="hint"></div>
+      <div id="galGrid"></div>
+      <div class="gbar">
+        <div class="gbtns">
+          <button id="galAll" class="batch">Vybrat vše</button>
+          <button id="galNone" class="batch">Zrušit výběr</button>
+        </div>
+        <button id="galDelete" class="danger" disabled>🗑 Smazat označené</button>
+        <button id="closeGallery" class="primary">Hotovo</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Zvětšený snímek -->
+  <div id="viewerSheet" class="sheet" hidden>
+    <div class="sheetBody">
+      <div id="viewLbl" class="hint"></div>
+      <img id="viewImg" alt="Snímek">
+      <div class="gbtns">
+        <button id="viewPrev" class="batch">‹ Předchozí</button>
+        <button id="viewNext" class="batch">Další ›</button>
+      </div>
+      <button id="viewSel" class="batch">☐ Označit</button>
+      <button id="viewDel" class="danger">🗑 Smazat tento snímek</button>
+      <button id="closeViewer" class="primary">Zpět</button>
     </div>
   </div>
 
@@ -187,6 +237,7 @@
       <canvas id="vCanvas" width="480" height="270"></canvas>
       <div class="vctl">
         <button id="vPlay" class="batch">▶ Přehrát</button>
+        <button id="vDel" class="danger">🗑 Smazat tento snímek (zobrazený)</button>
       </div>
       <input id="vSlider" type="range" min="0" max="0" value="0" step="1">
       <div id="vFrameLbl" class="hint"></div>

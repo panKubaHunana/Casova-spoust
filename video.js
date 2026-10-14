@@ -21,6 +21,15 @@
   const rq = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
   async function dbKeys() { const d = await db(); return rq(d.transaction('photos').objectStore('photos').getAllKeys()); }
   async function dbGet(id) { const d = await db(); return rq(d.transaction('photos').objectStore('photos').get(id)); }
+  async function dbDelete(id) {
+    const d = await db(); const tx = d.transaction('photos', 'readwrite'); tx.objectStore('photos').delete(id);
+    return new Promise((res, rej) => { tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error); });
+  }
+  // Snímky různých poměrů stran (např. 3:2 a 16:9 v jedné sadě) se oříznou na poměr prvního snímku, neroztáhnou se.
+  function drawCover(ctx, img, w, h) {
+    const s = Math.max(w / img.width, h / img.height), dw = img.width * s, dh = img.height * s;
+    ctx.drawImage(img, (w - dw) / 2, (h - dh) / 2, dw, dh);
+  }
 
   /* ---------- Stav ---------- */
   const DEF = { vFps: '12', vMode: 'normal', vRes: '1080', vQual: '0.2' };
@@ -81,8 +90,7 @@
     const tb = await ensureThumb(rec);
     const bmp = await createImageBitmap(tb);
     if (my !== showToken) { bmp.close(); return; }
-    if (prevCanvas.width !== bmp.width || prevCanvas.height !== bmp.height) { prevCanvas.width = bmp.width; prevCanvas.height = bmp.height; }
-    prevCtx.drawImage(bmp, 0, 0); bmp.close();
+    drawCover(prevCtx, bmp, prevCanvas.width, prevCanvas.height); bmp.close();
     $('vSlider').value = p;
     $('vFrameLbl').textContent = `${p + 1} / ${seq.length} (snímek č. ${seq[p] + 1})`;
   }
@@ -180,7 +188,7 @@
         if (encErr) throw encErr;
         const rec = await dbGet(keys[seq[i]]);
         const bmp = await createImageBitmap(rec.blob);
-        ctx.drawImage(bmp, 0, 0, w, h); bmp.close();
+        drawCover(ctx, bmp, w, h); bmp.close();
         const frame = new VideoFrame(workCanvas, { timestamp: Math.round(i * 1e6 / fps), duration: dur });
         enc.encode(frame, { keyFrame: i % (fps * 2) === 0 });
         frame.close();
@@ -218,6 +226,30 @@
     } catch (e) { if (e.name !== 'AbortError') toast('Sdílení selhalo: ' + (e.message || e)); }
   }
 
+  /* ---------- Smazání zobrazeného snímku ---------- */
+  async function deleteCurrent() {
+    if (building || !seq.length) return;
+    setPlaying(false);
+    if (keys.length <= 2) { toast('Zbývají jen 2 snímky – na video je potřeba aspoň 2.'); return; }
+    const idx = seq[pos]; // index v poli keys
+    if (!confirm(`Smazat snímek č. ${idx + 1} z aplikace? Co nemáš uložené ve Fotkách/Souborech, bude pryč.`)) return;
+    const from0 = parseInt($('vFrom').value, 10) || 1, to0 = parseInt($('vTo').value, 10) || keys.length;
+    const id = keys[idx];
+    try { await dbDelete(id); } catch (e) { toast('Mazání selhalo: ' + (e.message || e)); return; }
+    thumbCache.delete(id);
+    keys = await dbKeys();
+    const n = keys.length, num = idx + 1; // číslo smazaného snímku
+    let nf = from0 > num ? from0 - 1 : from0, nt = to0 >= num ? to0 - 1 : to0;
+    nf = Math.min(n, Math.max(1, nf)); nt = Math.min(n, Math.max(1, nt));
+    if (nf > nt) nf = nt;
+    $('vFrom').max = $('vTo').max = n; $('vFrom').value = nf; $('vTo').value = nt;
+    $('vSrc').textContent = `Snímků v aplikaci: ${n} · zdroj ${srcW}×${srcH} (snímky jiného poměru se oříznou na poměr prvního)`;
+    refreshSeq();
+    pos = Math.min(pos, Math.max(0, seq.length - 1));
+    await showFrame(pos);
+    toast('Snímek smazán.', 2500);
+  }
+
   /* ---------- Otevření a zavření ---------- */
   async function openVideo() {
     if (window.CS && window.CS.isRunning && window.CS.isRunning()) { toast('Nejdřív zastav snímání.'); return; }
@@ -227,10 +259,11 @@
     const first = await dbGet(keys[0]);
     srcW = first.w || 1920; srcH = first.h || 1080;
     prevCanvas = $('vCanvas'); prevCtx = prevCanvas.getContext('2d');
+    prevCanvas.width = 480; prevCanvas.height = Math.max(2, Math.round(480 * srcH / srcW));
     prevCanvas.style.aspectRatio = `${srcW} / ${srcH}`;
     $('vFrom').value = 1; $('vTo').value = keys.length; $('vFrom').max = $('vTo').max = keys.length;
     $('vFps').value = vcfg.vFps; $('vMode').value = vcfg.vMode; $('vRes').value = vcfg.vRes; $('vQual').value = vcfg.vQual;
-    $('vSrc').textContent = `Snímků v aplikaci: ${keys.length} · zdroj ${srcW}×${srcH}`;
+    $('vSrc').textContent = `Snímků v aplikaci: ${keys.length} · zdroj ${srcW}×${srcH} (snímky jiného poměru se oříznou na poměr prvního)`;
     $('vResult').hidden = true; $('vProg').hidden = true; $('vCancel').hidden = true; $('vBuild').hidden = false;
     $('videoSheet').hidden = false;
     refreshSeq(); pos = 0;
@@ -251,6 +284,7 @@
     $('videoBtn').addEventListener('click', openVideo);
     $('closeVideo').addEventListener('click', closeVideo);
     $('vPlay').addEventListener('click', () => setPlaying(!playing));
+    $('vDel').addEventListener('click', deleteCurrent);
     $('vSlider').addEventListener('input', () => { setPlaying(false); showFrame(parseInt($('vSlider').value, 10)); });
     ['vFrom', 'vTo'].forEach((id) => $(id).addEventListener('change', () => { setPlaying(false); refreshSeq(); showFrame(0); }));
     [['vFps', 'vFps'], ['vMode', 'vMode'], ['vRes', 'vRes'], ['vQual', 'vQual']].forEach(([id, k]) =>

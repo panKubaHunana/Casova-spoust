@@ -10,7 +10,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const DEFAULTS = {
   ratio: '3:2', intervalVal: 5, intervalUnit: 1, stopMode: 'count', countVal: 100,
   durationVal: 10, durationUnit: 60, delayVal: 3, resSel: 'max', camSel: 'environment',
-  flashMode: 'off', qualitySel: '0.9', gridChk: false, afLock: false
+  flashMode: 'off', qualitySel: '0.9', gridChk: false, afLock: false, aeLock: false
 };
 let cfg = { ...DEFAULTS };
 try { cfg = { ...DEFAULTS, ...JSON.parse(localStorage.getItem('cs-cfg') || '{}') }; } catch (e) {}
@@ -64,7 +64,8 @@ async function dbGet(id) { const d = await db(); return req(d.transaction('photo
 async function dbClear() { const d = await db(); return req(d.transaction('photos', 'readwrite').objectStore('photos').clear()); }
 
 /* ---------- Poměr stran a náhled ---------- */
-function ratioValue() { return cfg.ratio === '16:9' ? 16 / 9 : 3 / 2; }
+const RATIOS = { '3:2': 3 / 2, '4:3': 4 / 3, '16:9': 16 / 9 };
+function ratioValue() { return RATIOS[cfg.ratio] || 1.5; }
 // Podle orientace snímku (na výšku se poměr otočí: 2:3, 9:16)
 function targetRatio() {
   const vw = video.videoWidth, vh = video.videoHeight;
@@ -127,6 +128,7 @@ async function startCamera() {
     // znovu aplikovat blesk a zámek AF
     await applyFlashState();
     if (cfg.afLock) await applyAfLock(true, true);
+    if (cfg.aeLock) { await sleep(800); await applyAeLock(true, true); } // chvíli počkat, až se expozice ustálí
     updateButtons();
     return true;
   } catch (e) {
@@ -191,6 +193,44 @@ async function applyAfLock(lock, silent = false) {
     }
     return false;
   }
+}
+
+/* ---------- Zámek expozice a vyvážení bílé (AE/AWB) ---------- */
+// Zamkne aktuální expozici a barevnou teplotu, aby časosběr neblikal. Co Safari nepodporuje, ověřujeme
+// ze skutečného nastavení stopy (getSettings), ne jen podle toho, že applyConstraints nehodil chybu.
+async function applyAeLock(lock, silent = false) {
+  if (!track) return false;
+  const caps = (track.getCapabilities && track.getCapabilities()) || {};
+  const st0 = (track.getSettings && track.getSettings()) || {};
+  const defs = [
+    { key: 'exposureMode', label: 'expozice', modes: caps.exposureMode || [],
+      manual: () => { const o = {}; ['exposureTime', 'iso'].forEach((k) => { if (st0[k] != null) o[k] = st0[k]; }); return o; } },
+    { key: 'whiteBalanceMode', label: 'vyvážení bílé', modes: caps.whiteBalanceMode || [],
+      manual: () => { const o = {}; if (st0.colorTemperature != null) o.colorTemperature = st0.colorTemperature; return o; } }
+  ];
+  const done = [];
+  for (const d of defs) {
+    if (!d.modes.length) continue;
+    if (!lock) { try { await track.applyConstraints({ advanced: [{ [d.key]: 'continuous' }] }); } catch (e) {} continue; }
+    const order = ['single-shot', 'manual'].filter((m) => d.modes.includes(m));
+    for (const m of order) {
+      const c = { [d.key]: m };
+      if (m === 'manual') { const extra = d.manual(); if (!Object.keys(extra).length) continue; Object.assign(c, extra); }
+      try {
+        await track.applyConstraints({ advanced: [c] });
+        const s = (track.getSettings && track.getSettings()) || {};
+        if (s[d.key] !== 'continuous') { done.push(d.label); break; }
+      } catch (e) {}
+    }
+  }
+  if (!lock) return true;
+  if (!done.length) {
+    cfg.aeLock = false; saveCfg(); updateButtons();
+    if (!silent) toast('Tento iPhone/Safari neumožňuje zamknout expozici ani vyvážení bílé z webové aplikace.', 5500);
+    return false;
+  }
+  if (!silent) toast('Zamčeno: ' + done.join(' + ') + (done.length < 2 ? ' (druhou věc tento iPhone nepodporuje).' : '.'), 4500);
+  return true;
 }
 
 /* ---------- Pořízení snímku ---------- */
@@ -385,8 +425,11 @@ function updateButtons() {
   fb.classList.toggle('on', cfg.flashMode !== 'off' && cfg.camSel !== 'user');
   fb.disabled = cfg.camSel === 'user';
   const ab = $('afBtn');
-  ab.textContent = 'AF zámek: ' + (cfg.afLock ? 'zap' : 'vyp');
+  ab.textContent = 'AF: ' + (cfg.afLock ? 'zap' : 'vyp');
   ab.classList.toggle('on', cfg.afLock);
+  const eb = $('aeBtn');
+  eb.textContent = 'AE/WB: ' + (cfg.aeLock ? 'zap' : 'vyp');
+  eb.classList.toggle('on', cfg.aeLock);
   $('grid').classList.toggle('on', !!cfg.gridChk);
   if (!running && $('statusPill').className !== 'warn') setStatus('Připraveno');
 }
@@ -405,6 +448,13 @@ $('afBtn').addEventListener('click', async () => {
   cfg.afLock = !cfg.afLock; saveCfg(); updateButtons();
   const ok = await applyAfLock(cfg.afLock);
   if (cfg.afLock && ok) toast('Ostření zamknuto.');
+  updateButtons();
+});
+$('aeBtn').addEventListener('click', async () => {
+  cfg.aeLock = !cfg.aeLock; saveCfg(); updateButtons();
+  if (!track) { toast('Kamera není spuštěná.'); cfg.aeLock = false; saveCfg(); updateButtons(); return; }
+  if (cfg.aeLock) toast('Zamykám aktuální expozici a barvy…', 1500);
+  await applyAeLock(cfg.aeLock);
   updateButtons();
 });
 
@@ -471,16 +521,23 @@ async function showExport() {
   $('exportInfo').textContent = photoCount ? `Uloženo ${photoCount} snímků v aplikaci. Sdílej je po dávkách (max. ${BATCH} na dávku, aby to iOS zvládl).` : 'Zatím žádné snímky.';
   const list = $('batchList'); list.innerHTML = '';
   $('batchSel').value = String(BATCH);
+  $('fmtSel').value = FMT;
   const done = sharedSet();
   for (let i = 0; i < keys.length; i += BATCH) {
     const ids = keys.slice(i, i + BATCH);
     const mark = `${ids[0]}-${ids[ids.length - 1]}`;
     const b = document.createElement('button');
     b.className = 'batch' + (done.has(mark) ? ' done' : '');
-    const label = `Sdílet snímky ${i + 1}–${i + ids.length}`;
+    const label = `${FMT === 'zip' ? 'ZIP' : 'Sdílet'} snímky ${i + 1}–${i + ids.length}`;
     b.textContent = done.has(mark) ? `✓ ${label}` : label;
     b.addEventListener('click', async () => {
-      if (await shareBatch(ids)) { markShared(mark); b.classList.add('done'); b.textContent = `✓ ${label}`; }
+      if (b.disabled) return;
+      b.disabled = true;
+      const prev = b.textContent;
+      const ok = await shareBatch(ids, FMT === 'zip', `Snimky_${i + 1}-${i + ids.length}.zip`,
+        (k, n) => { b.textContent = `Připravuji ZIP ${k} / ${n}…`; });
+      b.disabled = false;
+      if (ok) { markShared(mark); b.classList.add('done'); b.textContent = `✓ ${label}`; } else b.textContent = prev;
     });
     list.appendChild(b);
   }
@@ -493,15 +550,73 @@ async function showExport() {
   if (last) { if (img.dataset.url) URL.revokeObjectURL(img.dataset.url); const u = URL.createObjectURL(last.blob); img.dataset.url = u; img.src = u; img.hidden = false; } else img.hidden = true;
   $('exportSheet').hidden = false;
 }
-async function shareBatch(ids) {
+async function shareBatch(ids, asZip, zipName, onProg) {
   try {
-    const files = [];
-    for (const id of ids) { const r = await dbGet(id); files.push(new File([r.blob], r.name, { type: 'image/jpeg' })); }
+    let files = [];
+    if (asZip) files = [await makeZip(ids, zipName, onProg)];
+    else for (const id of ids) { const r = await dbGet(id); files.push(new File([r.blob], r.name, { type: 'image/jpeg' })); }
     if (navigator.canShare && navigator.canShare({ files })) { await navigator.share({ files }); return true; }
+    if (asZip) { // záloha: klasické stažení souboru
+      const u = URL.createObjectURL(files[0]);
+      const a = document.createElement('a'); a.href = u; a.download = files[0].name; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(u), 60000);
+      return true;
+    }
     toast('Sdílení souborů tento prohlížeč nepodporuje.');
-  } catch (e) { if (e.name !== 'AbortError') toast('Sdílení selhalo: ' + (e.message || e)); }
+  } catch (e) { if (e.name !== 'AbortError') toast('Sdílení selhalo: ' + (e.message || e), 6000); }
   return false;
 }
+
+/* ---------- ZIP bez komprese (JPEG se už nezmenší) ---------- */
+const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(u8) { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRC_T[(c ^ u8[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+function dosDateTime(ts) {
+  const d = new Date(ts || Date.now());
+  return { t: (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1),
+           d: ((Math.max(1980, d.getFullYear()) - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate() };
+}
+async function makeZip(ids, name, onProg) {
+  const enc = new TextEncoder(), parts = [], entries = [];
+  let off = 0;
+  for (let k = 0; k < ids.length; k++) {
+    const r = await dbGet(ids[k]);
+    if (!r) continue;
+    const crc = crc32(new Uint8Array(await r.blob.arrayBuffer())); // po souboru, paměť se hned uvolní
+    const size = r.blob.size, nm = enc.encode(r.name), dt = dosDateTime(r.ts);
+    const h = new DataView(new ArrayBuffer(30));
+    h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true); h.setUint16(8, 0, true);
+    h.setUint16(10, dt.t, true); h.setUint16(12, dt.d, true); h.setUint32(14, crc, true);
+    h.setUint32(18, size, true); h.setUint32(22, size, true); h.setUint16(26, nm.length, true); h.setUint16(28, 0, true);
+    parts.push(h.buffer, nm, r.blob);
+    entries.push({ nm, crc, size, off, dt });
+    off += 30 + nm.length + size;
+    if (onProg) onProg(k + 1, ids.length);
+  }
+  let cdSize = 0;
+  for (const e of entries) {
+    const c = new DataView(new ArrayBuffer(46));
+    c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true);
+    c.setUint16(10, 0, true); c.setUint16(12, e.dt.t, true); c.setUint16(14, e.dt.d, true); c.setUint32(16, e.crc, true);
+    c.setUint32(20, e.size, true); c.setUint32(24, e.size, true); c.setUint16(28, e.nm.length, true);
+    c.setUint16(30, 0, true); c.setUint16(32, 0, true); c.setUint16(34, 0, true); c.setUint16(36, 0, true);
+    c.setUint32(38, 0, true); c.setUint32(42, e.off, true);
+    parts.push(c.buffer, e.nm); cdSize += 46 + e.nm.length;
+  }
+  const z = new DataView(new ArrayBuffer(22));
+  z.setUint32(0, 0x06054b50, true); z.setUint16(8, entries.length, true); z.setUint16(10, entries.length, true);
+  z.setUint32(12, cdSize, true); z.setUint32(16, off, true);
+  parts.push(z.buffer);
+  return new File(parts, name, { type: 'application/zip' });
+}
+window.CS_zip = { makeZip, crc32 }; // pro testování
+
+let FMT = 'img';
+try { FMT = localStorage.getItem('cs-fmt') === 'zip' ? 'zip' : 'img'; } catch (e) {}
+$('fmtSel').addEventListener('change', () => {
+  FMT = $('fmtSel').value === 'zip' ? 'zip' : 'img';
+  try { localStorage.setItem('cs-fmt', FMT); } catch (e) {}
+  showExport();
+});
 $('batchSel').addEventListener('change', () => {
   BATCH = parseInt($('batchSel').value, 10) || 40;
   try { localStorage.setItem('cs-batch', String(BATCH)); } catch (e) {}
@@ -515,6 +630,144 @@ $('clearBtn').addEventListener('click', async () => {
   await dbClear(); photoCount = 0; updateThumb(null);
   $('exportSheet').hidden = true; toast('Snímky smazány.');
 });
+
+/* ---------- Galerie: výběr a mazání snímků ---------- */
+async function dbPut(rec) { const d = await db(); return req(d.transaction('photos', 'readwrite').objectStore('photos').put(rec)); }
+async function dbDelete(ids) {
+  const d = await db();
+  const tx = d.transaction('photos', 'readwrite'), st = tx.objectStore('photos');
+  ids.forEach((id) => st.delete(id));
+  return new Promise((res, rej) => { tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error); });
+}
+async function thumbOf(rec) {
+  if (rec.thumb) return rec.thumb;
+  const bmp = await createImageBitmap(rec.blob);
+  const tw = 480, th = Math.max(1, Math.round(bmp.height * tw / bmp.width));
+  const c = document.createElement('canvas'); c.width = tw; c.height = th;
+  c.getContext('2d').drawImage(bmp, 0, 0, tw, th); bmp.close();
+  const b = await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.6));
+  c.width = c.height = 1;
+  if (b) { rec.thumb = b; dbPut(rec).catch(() => {}); } // příště už se nebude počítat znovu
+  return b;
+}
+let gKeys = [], gSel = new Set(), gView = -1, gToken = 0, viewUrl = null;
+
+async function afterDelete() {
+  photoCount = await dbCount();
+  const keys = await dbKeys();
+  if (keys.length) { const last = await dbGet(keys[keys.length - 1]); updateThumb(last.blob); } else updateThumb(null);
+}
+function updateGalBar() {
+  $('galInfo').textContent = `Snímků: ${gKeys.length} · označeno: ${gSel.size}. Klepnutím na snímek ho zvětšíš, kroužkem v rohu ho označíš.`;
+  const b = $('galDelete'); b.textContent = gSel.size ? `🗑 Smazat označené (${gSel.size})` : '🗑 Smazat označené';
+  b.disabled = !gSel.size;
+}
+function renumberCells() {
+  [...$('galGrid').children].forEach((c, i) => { c.dataset.i = i; c.querySelector('.gnum').textContent = i + 1; });
+}
+function removeCells(idxDesc) {
+  const grid = $('galGrid');
+  idxDesc.forEach((i) => { const c = grid.children[i]; if (c) { if (c._u) URL.revokeObjectURL(c._u); c.remove(); } });
+  renumberCells();
+}
+async function openGallery() {
+  if (running) { toast('Nejdřív zastav snímání.'); return; }
+  gKeys = await dbKeys(); gSel.clear();
+  if (!gKeys.length) { toast('Zatím nejsou žádné snímky.'); return; }
+  $('gallerySheet').hidden = false;
+  renderGallery();
+}
+async function renderGallery() {
+  const my = ++gToken, grid = $('galGrid');
+  [...grid.children].forEach((c) => { if (c._u) URL.revokeObjectURL(c._u); });
+  grid.innerHTML = '';
+  gKeys.forEach((id, i) => {
+    const c = document.createElement('div');
+    c.className = 'gcell' + (gSel.has(id) ? ' sel' : ''); c.dataset.i = i;
+    c.innerHTML = '<img alt=""><span class="gnum">' + (i + 1) + '</span><span class="chk"></span>';
+    grid.appendChild(c);
+  });
+  updateGalBar();
+  for (let i = 0; i < gKeys.length; i++) { // miniatury po jedné, aby se nezahltila paměť
+    if (my !== gToken) return;
+    const id = gKeys[i];
+    try {
+      const rec = await dbGet(id); if (!rec) continue;
+      const tb = await thumbOf(rec); if (!tb) continue;
+      const cell = grid.children[gKeys.indexOf(id)];
+      if (!cell || my !== gToken) return;
+      cell._u = URL.createObjectURL(tb); cell.querySelector('img').src = cell._u;
+    } catch (e) {}
+  }
+}
+function toggleSel(i) {
+  const id = gKeys[i]; if (id == null) return;
+  if (gSel.has(id)) gSel.delete(id); else gSel.add(id);
+  const c = $('galGrid').children[i]; if (c) c.classList.toggle('sel', gSel.has(id));
+  updateGalBar();
+}
+async function deleteSelected() {
+  if (!gSel.size) return;
+  if (!confirm(`Smazat ${gSel.size} označených snímků z aplikace? Co nemáš uložené ve Fotkách/Souborech, bude pryč.`)) return;
+  const ids = [...gSel];
+  try { await dbDelete(ids); } catch (e) { toast('Mazání selhalo: ' + (e.message || e)); return; }
+  const del = new Set(ids);
+  const idx = []; gKeys.forEach((id, i) => { if (del.has(id)) idx.push(i); });
+  gKeys = gKeys.filter((id) => !del.has(id)); gSel.clear();
+  removeCells(idx.reverse());
+  updateGalBar();
+  await afterDelete();
+  toast(`Smazáno ${ids.length} snímků.`);
+  if (!gKeys.length) closeGallery();
+}
+function closeGallery() {
+  gToken++;
+  $('viewerSheet').hidden = true; clearViewer();
+  [...$('galGrid').children].forEach((c) => { if (c._u) URL.revokeObjectURL(c._u); });
+  $('galGrid').innerHTML = '';
+  $('gallerySheet').hidden = true;
+  if (!$('exportSheet').hidden) showExport();
+}
+function clearViewer() { if (viewUrl) { URL.revokeObjectURL(viewUrl); viewUrl = null; } $('viewImg').removeAttribute('src'); }
+async function showViewer(i) {
+  if (i < 0 || i >= gKeys.length) return;
+  gView = i;
+  const rec = await dbGet(gKeys[i]);
+  if (!rec) return;
+  clearViewer();
+  viewUrl = URL.createObjectURL(rec.blob);
+  $('viewImg').src = viewUrl;
+  const sel = gSel.has(gKeys[i]);
+  $('viewLbl').textContent = `Snímek ${i + 1} / ${gKeys.length}${rec.w ? ` · ${rec.w}×${rec.h}` : ''}`;
+  $('viewSel').textContent = sel ? '☑ Označeno' : '☐ Označit';
+  $('viewerSheet').hidden = false;
+}
+async function deleteViewed() {
+  const i = gView; if (i < 0 || i >= gKeys.length) return;
+  if (!confirm(`Smazat snímek č. ${i + 1} z aplikace? Co nemáš uložené ve Fotkách/Souborech, bude pryč.`)) return;
+  const id = gKeys[i];
+  try { await dbDelete([id]); } catch (e) { toast('Mazání selhalo: ' + (e.message || e)); return; }
+  gKeys.splice(i, 1); gSel.delete(id);
+  removeCells([i]); updateGalBar();
+  await afterDelete();
+  if (!gKeys.length) { closeGallery(); return; }
+  await showViewer(Math.min(i, gKeys.length - 1));
+}
+$('galleryBtn').addEventListener('click', openGallery);
+$('galGrid').addEventListener('click', (e) => {
+  const cell = e.target.closest('.gcell'); if (!cell) return;
+  const i = parseInt(cell.dataset.i, 10);
+  if (e.target.classList.contains('chk')) toggleSel(i); else showViewer(i);
+});
+$('galAll').addEventListener('click', () => { gKeys.forEach((id) => gSel.add(id)); [...$('galGrid').children].forEach((c) => c.classList.add('sel')); updateGalBar(); });
+$('galNone').addEventListener('click', () => { gSel.clear(); [...$('galGrid').children].forEach((c) => c.classList.remove('sel')); updateGalBar(); });
+$('galDelete').addEventListener('click', deleteSelected);
+$('closeGallery').addEventListener('click', closeGallery);
+$('viewPrev').addEventListener('click', () => showViewer(gView - 1));
+$('viewNext').addEventListener('click', () => showViewer(gView + 1));
+$('viewSel').addEventListener('click', () => { toggleSel(gView); const s = gSel.has(gKeys[gView]); $('viewSel').textContent = s ? '☑ Označeno' : '☐ Označit'; });
+$('viewDel').addEventListener('click', deleteViewed);
+$('closeViewer').addEventListener('click', () => { $('viewerSheet').hidden = true; clearViewer(); });
 
 /* ---------- Životní cyklus ---------- */
 document.addEventListener('visibilitychange', async () => {
